@@ -39,6 +39,9 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
+    concurrency:
+      group: deploy-${{ github.ref }}
+      cancel-in-progress: false
     environment:
       name: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
       url: ${{ steps.saidas.outputs.auth_url }}
@@ -84,7 +87,7 @@ jobs:
 
       - name: Garante o repositório ECR
         if: env.SKIP_AWS != 'true'
-        run: terraform -chdir=terraform apply -auto-approve -target=aws_ecr_repository.auth -target=aws_ecr_lifecycle_policy.auth
+        run: terraform -chdir=terraform apply -auto-approve -lock-timeout=15m -target=aws_ecr_repository.auth -target=aws_ecr_lifecycle_policy.auth
 
       - uses: aws-actions/amazon-ecr-login@v2
         if: env.SKIP_AWS != 'true'
@@ -104,7 +107,7 @@ jobs:
         if: env.SKIP_AWS != 'true'
         run: |
           export TF_VAR_api_url=$(aws ssm get-parameter --name "/oficina/$ENV/api_url" --query Parameter.Value --output text 2>/dev/null || echo "")
-          terraform -chdir=terraform apply -auto-approve
+          terraform -chdir=terraform apply -auto-approve -lock-timeout=15m
 
       - name: Saídas
         id: saidas
