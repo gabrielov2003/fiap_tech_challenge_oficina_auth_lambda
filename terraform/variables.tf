@@ -25,6 +25,18 @@ variable "api_url" {
   default     = ""
 }
 
+variable "billing_url" {
+  description = "URL do LoadBalancer do Billing Service, publicada pelo pipeline dele em /oficina/<env>/billing_url"
+  type        = string
+  default     = ""
+}
+
+variable "execucao_url" {
+  description = "URL do LoadBalancer do Execution Service, publicada pelo pipeline dele em /oficina/<env>/execucao_url"
+  type        = string
+  default     = ""
+}
+
 variable "jwt_expiracao_segundos" {
   description = "Validade do token JWT gerado para o cliente"
   type        = number

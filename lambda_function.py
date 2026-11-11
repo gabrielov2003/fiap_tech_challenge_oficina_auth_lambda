@@ -1,23 +1,17 @@
 import base64
+import http.client
 import json
 import os
 import re
 import time
 import uuid
+from urllib.parse import urlsplit
 
 import jwt
-import psycopg2
 
-DB_HOST = os.getenv('DB_HOST')
-DB_PORT = os.getenv('DB_PORT', '5432')
-DB_NAME = os.getenv('DB_NAME', 'oficina')
-DB_USER = os.getenv('DB_USER')
-DB_PASSWORD = os.getenv('DB_PASSWORD')
-DB_SCHEMA = os.getenv('DB_SCHEMA', 'public')
+API_URL = os.getenv('API_URL', '')
 JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY')
 JWT_EXPIRACAO_SEGUNDOS = int(os.getenv('JWT_EXPIRACAO_SEGUNDOS', '3600'))
-
-_conexao = None
 
 
 def log(evento, correlation_id, nivel='INFO', **campos):
@@ -42,28 +36,33 @@ def validar_cpf(cpf):
     return cpf
 
 
-def obter_conexao():
-    global _conexao
-    if _conexao is None or _conexao.closed:
-        _conexao = psycopg2.connect(
-            host=DB_HOST, port=DB_PORT, dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
-            options=f'-c search_path={DB_SCHEMA}', connect_timeout=5
-        )
-        _conexao.autocommit = True
-    return _conexao
-
-
-def descartar_conexao():
-    global _conexao
-    if _conexao is not None and not _conexao.closed:
-        _conexao.close()
-    _conexao = None
+def token_de_servico():
+    agora = int(time.time())
+    return jwt.encode({
+        "sub": "auth-lambda", "role": "servico", "type": "access", "fresh": False,
+        "jti": str(uuid.uuid4()), "iat": agora, "nbf": agora, "exp": agora + 60,
+    }, JWT_SECRET_KEY, algorithm="HS256")
 
 
 def buscar_cliente(cpf):
-    with obter_conexao().cursor() as cursor:
-        cursor.execute("SELECT id_cliente, status FROM cliente WHERE documento = %s", (cpf,))
-        return cursor.fetchone()
+    url = urlsplit(API_URL)
+    tipo_conexao = http.client.HTTPSConnection if url.scheme == 'https' else http.client.HTTPConnection
+    conexao = tipo_conexao(url.netloc, timeout=5)
+    try:
+        conexao.request(
+            'GET', f"{url.path.rstrip('/')}/api/clientes/documento/{cpf}",
+            headers={'Authorization': f'Bearer {token_de_servico()}'}
+        )
+        resposta = conexao.getresponse()
+        corpo = resposta.read()
+    finally:
+        conexao.close()
+    if resposta.status == 404:
+        return None
+    if resposta.status != 200:
+        raise RuntimeError(f'OS Service respondeu {resposta.status} na consulta do cliente')
+    cliente = json.loads(corpo)[0]
+    return cliente['id_cliente'], cliente['status']
 
 
 def gerar_token(id_cliente, cpf):
@@ -110,9 +109,8 @@ def lambda_handler(event, context):
 
     try:
         cliente = buscar_cliente(cpf)
-    except psycopg2.Error as e:
+    except Exception as e:
         log('erro_consulta_cliente', correlation_id, nivel='ERROR', erro=type(e).__name__)
-        descartar_conexao()
         raise
 
     if not cliente:
