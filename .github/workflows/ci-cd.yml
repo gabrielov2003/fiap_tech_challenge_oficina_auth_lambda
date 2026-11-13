@@ -5,6 +5,7 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  workflow_dispatch:
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -38,7 +39,7 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     concurrency:
       group: deploy-${{ github.ref }}
       cancel-in-progress: false
@@ -100,13 +101,16 @@ jobs:
         run: |
           ALVO=base
           if [ -n "${{ secrets.DD_API_KEY }}" ]; then ALVO=datadog; fi
-          docker build --target $ALVO -t $IMAGEM:${{ github.sha }} .
-          docker push $IMAGEM:${{ github.sha }}
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+            --target $ALVO -t $IMAGEM:${{ github.sha }} --push .
 
       - name: Terraform apply
         if: env.SKIP_AWS != 'true'
         run: |
-          export TF_VAR_api_url=$(aws ssm get-parameter --name "/oficina/$ENV/api_url" --query Parameter.Value --output text 2>/dev/null || echo "")
+          ler_url() { aws ssm get-parameter --name "/oficina/$ENV/$1" --query Parameter.Value --output text 2>/dev/null || echo ""; }
+          export TF_VAR_api_url=$(ler_url api_url)
+          export TF_VAR_billing_url=$(ler_url billing_url)
+          export TF_VAR_execucao_url=$(ler_url execucao_url)
           terraform -chdir=terraform apply -auto-approve -lock-timeout=15m
 
       - name: Saídas

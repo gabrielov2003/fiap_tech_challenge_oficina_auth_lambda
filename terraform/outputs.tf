@@ -17,3 +17,7 @@ output "ecr_repository_url" {
 output "api_roteada" {
   value = var.api_url != ""
 }
+
+output "servicos_roteados" {
+  value = keys(local.servicos)
+}

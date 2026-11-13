@@ -22,6 +22,10 @@ provider "aws" {
 
 locals {
   nome = "oficina-auth-${var.env}"
+
+  servicos = {
+    for servico, url in { billing = var.billing_url, execucao = var.execucao_url } : servico => url if url != ""
+  }
 }
 
 data "aws_ssm_parameter" "vpc_id" {
@@ -30,26 +34,6 @@ data "aws_ssm_parameter" "vpc_id" {
 
 data "aws_ssm_parameter" "private_subnets" {
   name = "/oficina/network/private_subnet_ids"
-}
-
-data "aws_ssm_parameter" "db_host" {
-  name = "/oficina/db/host"
-}
-
-data "aws_ssm_parameter" "db_port" {
-  name = "/oficina/db/port"
-}
-
-data "aws_ssm_parameter" "db_name" {
-  name = "/oficina/db/name"
-}
-
-data "aws_ssm_parameter" "db_username" {
-  name = "/oficina/db/username"
-}
-
-data "aws_ssm_parameter" "db_password" {
-  name = "/oficina/db/password"
 }
 
 data "aws_ssm_parameter" "jwt_secret" {
@@ -136,12 +120,7 @@ resource "aws_lambda_function" "auth" {
 
   environment {
     variables = merge({
-      DB_HOST                = data.aws_ssm_parameter.db_host.value
-      DB_PORT                = data.aws_ssm_parameter.db_port.value
-      DB_NAME                = data.aws_ssm_parameter.db_name.value
-      DB_USER                = data.aws_ssm_parameter.db_username.value
-      DB_PASSWORD            = data.aws_ssm_parameter.db_password.value
-      DB_SCHEMA              = var.env
+      API_URL                = var.api_url
       JWT_SECRET_KEY         = data.aws_ssm_parameter.jwt_secret.value
       JWT_EXPIRACAO_SEGUNDOS = tostring(var.jwt_expiracao_segundos)
       DD_ENV                 = var.env
@@ -192,6 +171,27 @@ resource "aws_apigatewayv2_route" "api" {
   api_id    = aws_apigatewayv2_api.gateway.id
   route_key = "ANY /{proxy+}"
   target    = "integrations/${aws_apigatewayv2_integration.api[0].id}"
+}
+
+resource "aws_apigatewayv2_integration" "servicos" {
+  for_each = local.servicos
+
+  api_id             = aws_apigatewayv2_api.gateway.id
+  integration_type   = "HTTP_PROXY"
+  integration_method = "ANY"
+  integration_uri    = "${each.value}/${each.key}/{proxy}"
+
+  request_parameters = {
+    "overwrite:header.X-Correlation-ID" = "$context.requestId"
+  }
+}
+
+resource "aws_apigatewayv2_route" "servicos" {
+  for_each = local.servicos
+
+  api_id    = aws_apigatewayv2_api.gateway.id
+  route_key = "ANY /${each.key}/{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.servicos[each.key].id}"
 }
 
 resource "aws_lambda_permission" "gateway" {
