@@ -97,3 +97,51 @@ def test_handler_corpo_base64(monkeypatch):
     cliente_encontrado(monkeypatch, 7, 'ativo')
     corpo = base64.b64encode(json.dumps({'cpf': CPF_VALIDO}).encode()).decode()
     assert lambda_handler({'body': corpo, 'isBase64Encoded': True}, None)['statusCode'] == 200
+
+
+class ConexaoFalsa:
+    chamadas = []
+    resposta = (200, b'[]')
+
+    def __init__(self, host, timeout):
+        self.host = host
+
+    def request(self, metodo, caminho, headers):
+        ConexaoFalsa.chamadas.append((self.host, metodo, caminho, headers))
+
+    def getresponse(self):
+        status, corpo = ConexaoFalsa.resposta
+        return type('Resposta', (), {'status': status, 'read': lambda self: corpo})()
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def os_service(monkeypatch):
+    ConexaoFalsa.chamadas = []
+    monkeypatch.setattr(lambda_function, 'API_URL', 'http://oficina-lb.local')
+    monkeypatch.setattr(lambda_function.http.client, 'HTTPConnection', ConexaoFalsa)
+    return ConexaoFalsa
+
+
+def test_consulta_cliente_no_os_service_com_token_de_servico(os_service):
+    os_service.resposta = (200, json.dumps([{'id_cliente': 7, 'status': 'ativo', 'nome': 'Maria'}]).encode())
+    assert lambda_function.buscar_cliente(CPF_VALIDO) == (7, 'ativo')
+
+    host, metodo, caminho, headers = os_service.chamadas[0]
+    assert (host, metodo, caminho) == ('oficina-lb.local', 'GET', f'/api/clientes/documento/{CPF_VALIDO}')
+    claims = jwt.decode(headers['Authorization'].split()[1], SEGREDO, algorithms=['HS256'])
+    assert claims['role'] == 'servico'
+    assert claims['exp'] - claims['iat'] == 60
+
+
+def test_cliente_inexistente_no_os_service(os_service):
+    os_service.resposta = (404, b'{"erro": "Cliente n\xc3\xa3o encontrado"}')
+    assert lambda_function.buscar_cliente(CPF_VALIDO) is None
+
+
+def test_os_service_fora_do_ar_gera_erro(os_service):
+    os_service.resposta = (503, b'{}')
+    with pytest.raises(RuntimeError):
+        lambda_handler(evento({'cpf': CPF_VALIDO}), None)
