@@ -101,8 +101,8 @@ jobs:
         run: |
           ALVO=base
           if [ -n "${{ secrets.DD_API_KEY }}" ]; then ALVO=datadog; fi
-          docker build --target $ALVO -t $IMAGEM:${{ github.sha }} .
-          docker push $IMAGEM:${{ github.sha }}
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+            --target $ALVO -t $IMAGEM:${{ github.sha }} --push .
 
       - name: Terraform apply
         if: env.SKIP_AWS != 'true'
